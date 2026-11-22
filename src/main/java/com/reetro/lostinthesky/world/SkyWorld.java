@@ -231,6 +231,30 @@ public final class SkyWorld {
         return best;
     }
 
+    /**
+     * Lowest underside Y of any island (in any layer) over block column x/z, or null if the column
+     * is open sky. Used to keep player spawns on the ground below the islands.
+     */
+    @Nullable
+    public Integer lowestIslandBottomAt(int x, int z) {
+        int[] column = new int[2];
+        Integer lowest = null;
+        for (CompiledLayer layer : layers) {
+            int cs = layer.def.cellSize();
+            int cellX = Math.floorDiv(x, cs);
+            int cellZ = Math.floorDiv(z, cs);
+            for (int ox = -1; ox <= 1; ox++) {
+                for (int oz = -1; oz <= 1; oz++) {
+                    Island island = island(layer, cellX + ox, cellZ + oz);
+                    if (island != null && IslandMath.column(island.plan, island.centerY, x, z, column)) {
+                        lowest = lowest == null ? column[1] : Math.min(lowest, column[1]);
+                    }
+                }
+            }
+        }
+        return lowest;
+    }
+
     /** The island in one cell of a layer, or null. Results are cached. */
     @Nullable
     public Island island(CompiledLayer layer, int cellX, int cellZ) {
