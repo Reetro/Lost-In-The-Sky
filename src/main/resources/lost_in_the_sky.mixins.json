@@ -5,7 +5,11 @@
   "compatibilityLevel": "JAVA_21",
   "mixins": [
     "ChunkAccessMixin",
-    "PlayerRespawnLogicMixin"
+    "ChunkSkyLightSourcesMixin",
+    "GravityProcessorMixin",
+    "JigsawPlacerMixin",
+    "PlayerRespawnLogicMixin",
+    "ServerLevelMixin"
   ],
   "injectors": {
     "defaultRequire": 1

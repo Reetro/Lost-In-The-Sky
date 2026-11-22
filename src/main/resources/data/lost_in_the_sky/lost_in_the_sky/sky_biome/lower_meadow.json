@@ -1,6 +1,6 @@
 {
   "layer": "lost_in_the_sky:lower",
-  "biome": "minecraft:meadow",
+  "biome": "lost_in_the_sky:lower_sky_islands",
   "weight": 3,
   "top": { "Name": "minecraft:grass_block" },
   "filler": { "Name": "minecraft:dirt" },

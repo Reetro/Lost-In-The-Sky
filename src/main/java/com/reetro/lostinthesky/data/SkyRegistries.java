@@ -16,6 +16,7 @@ public final class SkyRegistries {
     public static final ResourceKey<Registry<SkyLayer>> SKY_LAYER = key("sky_layer");
     public static final ResourceKey<Registry<SkyBiome>> SKY_BIOME = key("sky_biome");
     public static final ResourceKey<Registry<SkyEncounter>> SKY_ENCOUNTER = key("sky_encounter");
+    public static final ResourceKey<Registry<SkyOre>> SKY_ORE = key("sky_ore");
 
     private SkyRegistries() {
     }
@@ -29,5 +30,6 @@ public final class SkyRegistries {
         event.dataPackRegistry(SKY_LAYER, SkyLayer.CODEC);
         event.dataPackRegistry(SKY_BIOME, SkyBiome.CODEC);
         event.dataPackRegistry(SKY_ENCOUNTER, SkyEncounter.CODEC);
+        event.dataPackRegistry(SKY_ORE, SkyOre.CODEC);
     }
 }

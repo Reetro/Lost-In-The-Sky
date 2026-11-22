@@ -1,0 +1,14 @@
+{
+  "structures": [
+    {
+      "structure": "lost_in_the_sky:sky_village_lower",
+      "weight": 1
+    }
+  ],
+  "placement": {
+    "type": "minecraft:random_spread",
+    "spacing": 1,
+    "separation": 0,
+    "salt": 537218446
+  }
+}

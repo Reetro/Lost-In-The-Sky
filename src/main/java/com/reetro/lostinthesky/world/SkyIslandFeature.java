@@ -80,9 +80,10 @@ public class SkyIslandFeature extends Feature<NoneFeatureConfiguration> {
                         }
                         int top = Math.min(column[0], maxY);
                         int bottom = Math.max(column[1], minY);
-                        fillColumn(level, pos, x, z, bottom, top, biome);
+                        boolean solidTop = fillColumn(level, pos, x, z, bottom, top, island);
                         int idx = lx * 16 + lz;
-                        if (owners[idx] == null || top > tops[idx]) {
+                        // Columns with a cave entrance get no trees or flowers over the hole.
+                        if (solidTop && (owners[idx] == null || top > tops[idx])) {
                             tops[idx] = top;
                             owners[idx] = island;
                         }
@@ -100,22 +101,37 @@ public class SkyIslandFeature extends Feature<NoneFeatureConfiguration> {
         return placedAny;
     }
 
-    private static void fillColumn(WorldGenLevel level, BlockPos.MutableBlockPos pos, int x, int z,
-                                   int bottom, int top, SkyWorld.CompiledBiome biome) {
+    /** Fills one column of an island. Returns false if a cave entrance opens its top. */
+    private static boolean fillColumn(WorldGenLevel level, BlockPos.MutableBlockPos pos, int x, int z,
+                                      int bottom, int top, SkyWorld.Island island) {
+        SkyWorld.CompiledBiome biome = island.biome();
         SkyBiome def = biome == null ? null : biome.def();
         BlockState topState = def == null ? net.minecraft.world.level.block.Blocks.GRASS_BLOCK.defaultBlockState() : def.top();
         BlockState fillerState = def == null ? net.minecraft.world.level.block.Blocks.DIRT.defaultBlockState() : def.filler();
         BlockState coreState = def == null ? net.minecraft.world.level.block.Blocks.STONE.defaultBlockState() : def.core();
         int fillerDepth = def == null ? 3 : def.fillerDepth();
+        boolean caves = IslandMath.hasCaves(island.plan(), island.layer().def.caveChance());
+        int entrance = caves ? IslandMath.entranceFrom(island.plan(), x, z, top, bottom) : Integer.MAX_VALUE;
         for (int y = bottom; y <= top; y++) {
+            if (y >= entrance || (caves && IslandMath.caveAt(island.plan(), x, y, z, top))) {
+                continue;
+            }
             pos.set(x, y, z);
             // Only fill air: never overwrite mountains, trees or structures already there.
             if (!level.getBlockState(pos).isAir()) {
                 continue;
             }
             BlockState state = y == top ? topState : (y >= top - fillerDepth ? fillerState : coreState);
+            // Ores only in the hanging underside, never in the ground players build on.
+            if (state == coreState && y < island.centerY()) {
+                BlockState ore = island.layer().oreAt(island.plan().seed(), x, y, z);
+                if (ore != null) {
+                    state = ore;
+                }
+            }
             level.setBlock(pos, state, 2);
         }
+        return entrance == Integer.MAX_VALUE;
     }
 
     private static void decorate(FeaturePlaceContext<NoneFeatureConfiguration> context, WorldGenLevel level,

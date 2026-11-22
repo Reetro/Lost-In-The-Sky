@@ -2,6 +2,7 @@ package com.reetro.lostinthesky;
 
 import com.mojang.logging.LogUtils;
 import com.reetro.lostinthesky.data.SkyRegistries;
+import com.reetro.lostinthesky.world.IslandShadows;
 import com.reetro.lostinthesky.world.SkyIslandFeature;
 import com.reetro.lostinthesky.world.SkyJigsawStructure;
 import com.reetro.lostinthesky.world.SkyWorld;
@@ -25,6 +26,7 @@ import org.slf4j.Logger;
  *   <li>World height: {@code data/minecraft/dimension_type/overworld.json}</li>
  *   <li>Island blocks: {@link SkyIslandFeature}</li>
  *   <li>Island biomes: {@link com.reetro.lostinthesky.mixin.ChunkAccessMixin}</li>
+ *   <li>No island shadows on the ground: {@link IslandShadows}</li>
  *   <li>Big dungeons on islands: {@link SkyJigsawStructure}</li>
  *   <li>Layers, biomes, bosses: JSON, see {@link SkyRegistries}</li>
  * </ul>
@@ -48,6 +50,7 @@ public class LostInTheSky {
         STRUCTURE_TYPES.register(modEventBus);
         modEventBus.addListener(SkyRegistries::onNewRegistry);
         NeoForge.EVENT_BUS.addListener(LostInTheSky::onServerStopped);
+        IslandShadows.register(modEventBus);
     }
 
     private static void onServerStopped(ServerStoppedEvent event) {

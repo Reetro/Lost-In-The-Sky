@@ -1,19 +1,25 @@
 package com.reetro.lostinthesky.world;
 
+import com.mojang.datafixers.util.Pair;
 import com.reetro.lostinthesky.LostInTheSky;
 import com.reetro.lostinthesky.data.SkyBiome;
 import com.reetro.lostinthesky.data.SkyEncounter;
 import com.reetro.lostinthesky.data.SkyLayer;
+import com.reetro.lostinthesky.data.SkyOre;
 import com.reetro.lostinthesky.data.SkyRegistries;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.levelgen.RandomState;
@@ -28,6 +34,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 /**
  * Everything the sky needs for one running server: the compiled layers/biomes/encounters and a
@@ -44,6 +51,8 @@ public final class SkyWorld {
     private static final int BIOME_ABOVE = 12;
     private static final int BIOME_BELOW = 4;
     private static final int CACHE_LIMIT = 250_000;
+    /** Minimum open-sky gap (seen from above) between islands of different layers. 0 = they may touch. */
+    private static final int STACK_GAP = 0;
 
     private static volatile SkyWorld instance;
 
@@ -136,12 +145,29 @@ public final class SkyWorld {
             }
             layer.encounters.add(new CompiledEncounter(entry.getKey().location(), def));
         }
+        for (Map.Entry<ResourceKey<SkyOre>, SkyOre> entry : access.registryOrThrow(SkyRegistries.SKY_ORE).entrySet()) {
+            SkyOre def = entry.getValue();
+            CompiledLayer layer = find(layers, def.layer());
+            if (layer == null) {
+                LostInTheSky.LOGGER.warn("Sky ore {} names unknown layer {}", entry.getKey().location(), def.layer());
+                continue;
+            }
+            Optional<Block> block = BuiltInRegistries.BLOCK.getOptional(def.block());
+            if (block.isEmpty()) {
+                LostInTheSky.LOGGER.debug("Sky ore {}: block {} not installed, skipped", entry.getKey().location(), def.block());
+                continue;
+            }
+            layer.ores.add(new CompiledOre(entry.getKey().location(), def, block.get().defaultBlockState()));
+        }
+
         // Registry order isn't guaranteed to be stable between runs, but island contents must be.
         for (CompiledLayer layer : layers) {
+            layer.ores.sort(Comparator.comparing(o -> o.id.toString()));
+            layer.compileOres();
             layer.biomes.sort(Comparator.comparing(b -> b.id.toString()));
             layer.encounters.sort(Comparator.comparing(e -> e.id.toString()));
             layer.totalWeight = layer.biomes.stream().mapToInt(b -> b.def.weight()).sum();
-            LostInTheSky.LOGGER.info("Sky layer {}: {} biomes, {} encounters", layer.id, layer.biomes.size(), layer.encounters.size());
+            LostInTheSky.LOGGER.info("Sky layer {}: {} biomes, {} encounters, {} ores", layer.id, layer.biomes.size(), layer.encounters.size(), layer.ores.size());
         }
 
         long seed = server.getWorldData().worldGenOptions().seed();
@@ -210,6 +236,56 @@ public final class SkyWorld {
                 }
             }
         }
+    }
+
+    /**
+     * Nearest island (by horizontal distance to its centre) whose sky biome matches, within
+     * {@code radius} blocks, for {@code /locate biome}. Searches each layer's cell grid in growing
+     * rings and stops once no closer island is possible.
+     *
+     * @return the island centre on its surface and its biome, or null if none is in range
+     */
+    @Nullable
+    public Pair<BlockPos, Holder<Biome>> findClosestIsland(Predicate<Holder<Biome>> biomes, BlockPos from, int radius) {
+        Island best = null;
+        double bestDist = radius;
+        for (CompiledLayer layer : layers) {
+            if (layer.biomes.stream().noneMatch(b -> biomes.test(b.holder))) {
+                continue;
+            }
+            int cs = layer.def.cellSize();
+            int cellX = Math.floorDiv(from.getX(), cs);
+            int cellZ = Math.floorDiv(from.getZ(), cs);
+            int maxRing = radius / cs + 2;
+            for (int ring = 0; ring <= maxRing; ring++) {
+                // Anything in this ring or further is at least (ring - 1) cells away.
+                if ((ring - 1) * (double) cs > bestDist) {
+                    break;
+                }
+                for (int ox = -ring; ox <= ring; ox++) {
+                    for (int oz = -ring; oz <= ring; oz++) {
+                        if (Math.max(Math.abs(ox), Math.abs(oz)) != ring) {
+                            continue;
+                        }
+                        Island island = island(layer, cellX + ox, cellZ + oz);
+                        if (island == null || island.biome == null || !biomes.test(island.biome.holder)) {
+                            continue;
+                        }
+                        double dist = Math.hypot(island.plan.centerX() - from.getX(), island.plan.centerZ() - from.getZ());
+                        if (dist < bestDist) {
+                            bestDist = dist;
+                            best = island;
+                        }
+                    }
+                }
+            }
+        }
+        if (best == null) {
+            return null;
+        }
+        Integer top = surfaceAt(best.layer, best.plan.centerX(), best.plan.centerZ());
+        int y = top == null ? best.centerY : top + 1;
+        return Pair.of(new BlockPos(best.plan.centerX(), y, best.plan.centerZ()), best.biome.holder);
     }
 
     /** Top block Y of the island in {@code layer} at x/z, or null if there is no island there. */
@@ -285,6 +361,9 @@ public final class SkyWorld {
         if (centerY > layer.def.maxY()) {
             return null;
         }
+        if (overlapsLowerIsland(layer, plan)) {
+            return null;
+        }
 
         CompiledBiome biome = null;
         if (layer.totalWeight > 0) {
@@ -312,6 +391,36 @@ public final class SkyWorld {
             }
         }
         return new Island(layer, plan, centerY, biome, encounter);
+    }
+
+    /**
+     * Islands never sit directly over the layer below: if this island's footprint would overlap an
+     * island in the next layer down, that one wins and this one is dropped. Only the layer directly
+     * below is checked (checking every lower layer left the final layer ~94% empty). Lower layers
+     * only, so the recursion through {@link #island} always ends at the bottom layer and the result
+     * is deterministic.
+     */
+    private boolean overlapsLowerIsland(CompiledLayer layer, IslandMath.Plan plan) {
+        if (layer.index == 0) {
+            return false;
+        }
+        CompiledLayer lower = layers.get(layer.index - 1);
+        int cs = lower.def.cellSize();
+        int lowerMaxR = Math.min(lower.shape.maxRadius(), lower.shape.safeMaxRadius());
+        int range = (int) Math.ceil(IslandMath.reach(plan) + lowerMaxR * (1.0 + IslandMath.EDGE_WOBBLE) + STACK_GAP);
+        int minCellX = Math.floorDiv(plan.centerX() - range, cs);
+        int maxCellX = Math.floorDiv(plan.centerX() + range, cs);
+        int minCellZ = Math.floorDiv(plan.centerZ() - range, cs);
+        int maxCellZ = Math.floorDiv(plan.centerZ() + range, cs);
+        for (int cx = minCellX; cx <= maxCellX; cx++) {
+            for (int cz = minCellZ; cz <= maxCellZ; cz++) {
+                Island other = island(lower, cx, cz);
+                if (other != null && IslandMath.footprintsOverlap(plan, other.plan, STACK_GAP)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private int seaLevel() {
@@ -347,14 +456,18 @@ public final class SkyWorld {
         final long salt;
         final List<CompiledBiome> biomes;
         final List<CompiledEncounter> encounters;
+        final List<CompiledOre> ores;
+        /** Per ore: chance a 4x4x4 cell holds a vein, and the vein size (see {@link IslandMath#oreAt}). */
+        double[] oreCellChance = new double[0];
+        int[] oreVeinSize = new int[0];
         int totalWeight;
 
         CompiledLayer(int index, ResourceLocation id, SkyLayer def, long salt) {
-            this(index, id, def, salt, new ArrayList<>(), new ArrayList<>());
+            this(index, id, def, salt, new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
         }
 
         private CompiledLayer(int index, ResourceLocation id, SkyLayer def, long salt,
-                              List<CompiledBiome> biomes, List<CompiledEncounter> encounters) {
+                              List<CompiledBiome> biomes, List<CompiledEncounter> encounters, List<CompiledOre> ores) {
             this.index = index;
             this.id = id;
             this.def = def;
@@ -362,10 +475,39 @@ public final class SkyWorld {
             this.salt = salt;
             this.biomes = biomes;
             this.encounters = encounters;
+            this.ores = ores;
         }
 
         CompiledLayer withIndex(int newIndex) {
-            return new CompiledLayer(newIndex, id, def, salt, biomes, encounters);
+            return new CompiledLayer(newIndex, id, def, salt, biomes, encounters, ores);
+        }
+
+        void compileOres() {
+            oreCellChance = new double[ores.size()];
+            oreVeinSize = new int[ores.size()];
+            for (int i = 0; i < ores.size(); i++) {
+                SkyOre def = ores.get(i).def;
+                oreVeinSize[i] = def.veinSize();
+                // A vein averages veinSize blocks, so this many veins per 64-block cell gives `chance`.
+                oreCellChance[i] = def.chance() * 64.0 / def.veinSize();
+            }
+            double total = java.util.Arrays.stream(oreCellChance).sum();
+            if (total > 1.0) {
+                LostInTheSky.LOGGER.warn("Sky layer {}: ore chances add up to more than the stone can hold, scaling them down", id);
+                for (int i = 0; i < oreCellChance.length; i++) {
+                    oreCellChance[i] /= total;
+                }
+            }
+        }
+
+        /** The ore at a block in an island's underside, or null for plain stone. */
+        @Nullable
+        public BlockState oreAt(long islandSeed, int x, int y, int z) {
+            if (ores.isEmpty()) {
+                return null;
+            }
+            int i = IslandMath.oreAt(islandSeed, x, y, z, oreCellChance, oreVeinSize);
+            return i < 0 ? null : ores.get(i).state;
         }
 
         /** Conservative Y range islands of this layer can occupy, for quick rejects. */
@@ -390,6 +532,9 @@ public final class SkyWorld {
     }
 
     public record CompiledEncounter(ResourceLocation id, SkyEncounter def) {
+    }
+
+    public record CompiledOre(ResourceLocation id, SkyOre def, BlockState state) {
     }
 
     /** A placed island: its shape, resting height, biome and optional encounter. */

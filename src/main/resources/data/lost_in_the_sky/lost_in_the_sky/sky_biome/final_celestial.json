@@ -1,6 +1,6 @@
 {
   "layer": "lost_in_the_sky:final",
-  "biome": "lost_in_the_sky:celestial_isles",
+  "biome": "lost_in_the_sky:final_sky_islands",
   "weight": 1,
   "top": { "Name": "minecraft:moss_block" },
   "filler": { "Name": "minecraft:calcite" },

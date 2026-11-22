@@ -1,0 +1,6 @@
+{
+  "layer": "lost_in_the_sky:lower",
+  "block": "minecraft:copper_ore",
+  "chance": 0.02,
+  "vein_size": 8
+}

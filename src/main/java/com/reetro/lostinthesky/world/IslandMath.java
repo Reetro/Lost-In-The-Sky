@@ -11,6 +11,24 @@ package com.reetro.lostinthesky.world;
 public final class IslandMath {
     /** How far the island edge can wobble outward, as a fraction of its radius. */
     public static final double EDGE_WOBBLE = 0.22;
+    /** How far the island edge can bite inward, as a fraction of its radius. */
+    private static final double INWARD_WOBBLE = 0.45;
+    /** Narrowest an island gets across its short axis, as a fraction of its long axis. */
+    private static final double MIN_ASPECT = 0.6;
+    /** Domain-warp strength for the outline, in noise cells. */
+    private static final double WARP = 0.35;
+    /** Solid blocks kept above any cave, under an island's surface. */
+    private static final int CAVE_ROOF = 4;
+    /** Tunnel radius in noise units (bigger = wider tunnels). */
+    private static final double TUNNEL_WIDTH = 0.13;
+    /** Deepest a surface entrance shaft goes looking for a cave. */
+    private static final int SHAFT_MAX_DEPTH = 32;
+    /** Coarse entrance mask: higher = fewer areas with entrances. */
+    private static final double ENTRANCE_AREA = 0.45;
+    /** Fine entrance mask: higher = fewer, smaller holes. */
+    private static final double ENTRANCE_HOLE = 0.55;
+    /** Chamber noise above this is hollow (lower = more and bigger chambers). */
+    private static final double CHAMBER_THRESHOLD = 0.4;
 
     private IslandMath() {
     }
@@ -60,32 +78,80 @@ public final class IslandMath {
 
     // ---------------------------------------------------------------- noise
 
-    private static double lattice(long seed, int x, int z) {
-        return unit(hash(seed, x, z, 0x51A7E)) * 2.0 - 1.0;
+    private static final double[] GRAD_X = {1, -1, 0, 0, 0.70710678, -0.70710678, 0.70710678, -0.70710678};
+    private static final double[] GRAD_Z = {0, 0, 1, -1, 0.70710678, 0.70710678, -0.70710678, -0.70710678};
+
+    private static double fade(double t) {
+        return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
     }
 
-    private static double smooth(double t) {
-        return t * t * (3.0 - 2.0 * t);
+    private static double gradient(long seed, int ix, int iz, double dx, double dz) {
+        int g = (int) (hash(seed, ix, iz, 0x9E57L) & 7);
+        return GRAD_X[g] * dx + GRAD_Z[g] * dz;
     }
 
-    /** Smooth value noise in [-1, 1]. */
-    public static double valueNoise(long seed, double x, double z) {
+    /** 2D Perlin (gradient) noise in [-1, 1]. One unit = one lattice cell. */
+    public static double perlin(long seed, double x, double z) {
         int x0 = (int) Math.floor(x);
         int z0 = (int) Math.floor(z);
-        double tx = smooth(x - x0);
-        double tz = smooth(z - z0);
-        double a = lattice(seed, x0, z0);
-        double b = lattice(seed, x0 + 1, z0);
-        double c = lattice(seed, x0, z0 + 1);
-        double d = lattice(seed, x0 + 1, z0 + 1);
-        double ab = a + (b - a) * tx;
-        double cd = c + (d - c) * tx;
-        return ab + (cd - ab) * tz;
+        double fx = x - x0;
+        double fz = z - z0;
+        double u = fade(fx);
+        double v = fade(fz);
+        double n00 = gradient(seed, x0, z0, fx, fz);
+        double n10 = gradient(seed, x0 + 1, z0, fx - 1, fz);
+        double n01 = gradient(seed, x0, z0 + 1, fx, fz - 1);
+        double n11 = gradient(seed, x0 + 1, z0 + 1, fx - 1, fz - 1);
+        double a = n00 + (n10 - n00) * u;
+        double b = n01 + (n11 - n01) * u;
+        // Unit gradients peak at ~0.707; scale to roughly [-1, 1].
+        return Math.max(-1.0, Math.min(1.0, (a + (b - a) * v) * 1.41421356));
     }
 
-    /** Two-octave noise in roughly [-1, 1]. */
-    public static double fbm(long seed, double x, double z) {
-        return (valueNoise(seed, x, z) * 0.67 + valueNoise(seed + 101, x * 2.03, z * 2.03) * 0.33);
+    private static final int[][] GRAD3 = {
+            {1, 1, 0}, {-1, 1, 0}, {1, -1, 0}, {-1, -1, 0}, {1, 0, 1}, {-1, 0, 1},
+            {1, 0, -1}, {-1, 0, -1}, {0, 1, 1}, {0, -1, 1}, {0, 1, -1}, {0, -1, -1}};
+
+    private static double gradient3(long seed, int ix, int iy, int iz, double dx, double dy, double dz) {
+        int[] g = GRAD3[(int) Math.floorMod(hash(seed, ix, iz, 0x3D3DL ^ (iy * 0x9E3779B97F4A7C15L)), 12L)];
+        return g[0] * dx + g[1] * dy + g[2] * dz;
+    }
+
+    /** 3D Perlin (gradient) noise, roughly in [-1, 1]. One unit = one lattice cell. */
+    public static double perlin3(long seed, double x, double y, double z) {
+        int x0 = (int) Math.floor(x);
+        int y0 = (int) Math.floor(y);
+        int z0 = (int) Math.floor(z);
+        double fx = x - x0;
+        double fy = y - y0;
+        double fz = z - z0;
+        double u = fade(fx);
+        double v = fade(fy);
+        double w = fade(fz);
+        double x00 = lerp(u, gradient3(seed, x0, y0, z0, fx, fy, fz), gradient3(seed, x0 + 1, y0, z0, fx - 1, fy, fz));
+        double x10 = lerp(u, gradient3(seed, x0, y0 + 1, z0, fx, fy - 1, fz), gradient3(seed, x0 + 1, y0 + 1, z0, fx - 1, fy - 1, fz));
+        double x01 = lerp(u, gradient3(seed, x0, y0, z0 + 1, fx, fy, fz - 1), gradient3(seed, x0 + 1, y0, z0 + 1, fx - 1, fy, fz - 1));
+        double x11 = lerp(u, gradient3(seed, x0, y0 + 1, z0 + 1, fx, fy - 1, fz - 1), gradient3(seed, x0 + 1, y0 + 1, z0 + 1, fx - 1, fy - 1, fz - 1));
+        return lerp(w, lerp(v, x00, x10), lerp(v, x01, x11));
+    }
+
+    private static double lerp(double t, double a, double b) {
+        return a + (b - a) * t;
+    }
+
+    /** Fractal Perlin: {@code octaves} layers, each twice the detail and half the strength. In [-1, 1]. */
+    public static double perlinFbm(long seed, double x, double z, int octaves) {
+        double sum = 0.0;
+        double amp = 1.0;
+        double norm = 0.0;
+        double freq = 1.0;
+        for (int i = 0; i < octaves; i++) {
+            sum += amp * perlin(seed + i * 1013L, x * freq, z * freq);
+            norm += amp;
+            amp *= 0.5;
+            freq *= 2.0;
+        }
+        return sum / norm;
     }
 
     // ---------------------------------------------------------------- islands
@@ -113,6 +179,100 @@ public final class IslandMath {
                 unit(mix(h + 6)));
     }
 
+    /** Furthest an island's edge can reach from its centre, edge wobble included. */
+    public static double reach(Plan p) {
+        return p.radius() * (1.0 + EDGE_WOBBLE);
+    }
+
+    /** True if the two islands' footprints (seen from above) come within {@code gap} blocks of each other. */
+    public static boolean footprintsOverlap(Plan a, Plan b, int gap) {
+        double dx = a.centerX() - b.centerX();
+        double dz = a.centerZ() - b.centerZ();
+        double min = reach(a) + reach(b) + gap;
+        return dx * dx + dz * dz < min * min;
+    }
+
+    /** True if this island rolled caves (see the layer's {@code cave_chance}). */
+    public static boolean hasCaves(Plan p, double caveChance) {
+        return unit(mix(p.seed() + 40)) < caveChance;
+    }
+
+    /**
+     * True if a block inside a cave island is cave (left as air). Winding tunnels where two 3D
+     * Perlin fields both cross zero ("spaghetti" caves), plus the occasional larger chamber. The top
+     * {@link #CAVE_ROOF} blocks of each column stay solid so the surface is never holed; tunnels may
+     * open out through the sides and underside, which makes the entrances.
+     */
+    public static boolean caveAt(Plan p, int x, int y, int z, int top) {
+        if (y > top - CAVE_ROOF) {
+            return false;
+        }
+        long seed = p.seed();
+        double a = perlin3(seed + 51, x / 44.0, y / 26.0, z / 44.0);
+        double b = perlin3(seed + 52, x / 44.0, y / 26.0, z / 44.0);
+        if (a * a + b * b < TUNNEL_WIDTH * TUNNEL_WIDTH) {
+            return true;
+        }
+        return perlin3(seed + 53, x / 38.0, y / 20.0, z / 38.0) > CHAMBER_THRESHOLD;
+    }
+
+    /**
+     * Surface cave entrance: in a few small patches of a cave island's top (two Perlin masks: a coarse
+     * one picks the areas, a fine one the holes), a shaft opens from the surface down to the nearest
+     * cave below. Only where a cave is within {@link #SHAFT_MAX_DEPTH} blocks, so there are no
+     * dead-end pits.
+     *
+     * @return the Y the shaft reaches down to (open from there to the top), or Integer.MAX_VALUE for none
+     */
+    public static int entranceFrom(Plan p, int x, int z, int top, int bottom) {
+        long seed = p.seed();
+        if (perlin(seed + 60, x / 48.0, z / 48.0) < ENTRANCE_AREA
+                || perlin(seed + 61, x / 9.0, z / 9.0) < ENTRANCE_HOLE) {
+            return Integer.MAX_VALUE;
+        }
+        for (int y = top - CAVE_ROOF; y >= Math.max(bottom, top - SHAFT_MAX_DEPTH); y--) {
+            if (caveAt(p, x, y, z, top)) {
+                return y;
+            }
+        }
+        return Integer.MAX_VALUE;
+    }
+
+    /**
+     * Which ore vein, if any, covers a block. Space is split into 4x4x4 cells; each cell holds at
+     * most one vein, a loose cluster in a 3x3x3 box. Only uses the island seed and the position, so
+     * veins line up across chunk borders.
+     *
+     * @param cellChance chance per cell of holding a vein of each ore (summing to at most 1)
+     * @param veinSize   average blocks per vein for each ore (1-27)
+     * @return index of the ore, or -1 for plain stone
+     */
+    public static int oreAt(long islandSeed, int x, int y, int z, double[] cellChance, int[] veinSize) {
+        int cx = Math.floorDiv(x, 4);
+        int cy = Math.floorDiv(y, 4);
+        int cz = Math.floorDiv(z, 4);
+        long h = hash(islandSeed, cx, cz, 0x0E5L ^ (cy * 0x9E3779B97F4A7C15L));
+        double roll = unit(h);
+        int pick = -1;
+        for (int i = 0; i < cellChance.length; i++) {
+            roll -= cellChance[i];
+            if (roll < 0) {
+                pick = i;
+                break;
+            }
+        }
+        if (pick < 0) {
+            return -1;
+        }
+        int ox = cx * 4 + (int) (mix(h + 1) & 1);
+        int oy = cy * 4 + (int) (mix(h + 2) & 1);
+        int oz = cz * 4 + (int) (mix(h + 3) & 1);
+        if (x < ox || x > ox + 2 || y < oy || y > oy + 2 || z < oz || z > oz + 2) {
+            return -1;
+        }
+        return unit(hash(islandSeed, x, z, 0x0E6L ^ (y * 0x9E3779B97F4A7C15L))) < veinSize[pick] / 27.0 ? pick : -1;
+    }
+
     /**
      * Solid range of an island in one block column.
      *
@@ -123,22 +283,46 @@ public final class IslandMath {
     public static boolean column(Plan p, int centerY, int x, int z, int[] out) {
         double dx = x - p.centerX();
         double dz = z - p.centerZ();
-        double dist = Math.sqrt(dx * dx + dz * dz);
-        if (dist >= p.radius() * (1.0 + EDGE_WOBBLE)) {
+        double r = p.radius();
+        if (dx * dx + dz * dz >= r * r * (1.0 + EDGE_WOBBLE) * (1.0 + EDGE_WOBBLE)) {
             return false;
         }
-        double edge = fbm(p.seed(), x / 28.0, z / 28.0);
-        double effective = p.radius() * (1.0 + EDGE_WOBBLE * edge);
+        long seed = p.seed();
+
+        // Squash each island along a random axis, so some are oval. Squashing only ever shrinks the
+        // footprint, so reach() and the 3x3 cell search stay valid.
+        double angle = unit(mix(seed + 21)) * Math.PI;
+        double aspect = MIN_ASPECT + (1.0 - MIN_ASPECT) * unit(mix(seed + 22));
+        double cos = Math.cos(angle);
+        double sin = Math.sin(angle);
+        double u = dx * cos + dz * sin;
+        double v = (dz * cos - dx * sin) / aspect;
+        double dist = Math.sqrt(u * u + v * v);
+
+        // Outline: domain-warped fractal Perlin, scaled to the island so big and small ones get the
+        // same kind of lobes and bays. Outward bulges are capped at EDGE_WOBBLE; inward bites go deeper.
+        double scale = Math.max(12.0, r * 0.55);
+        double wx = x / scale + WARP * perlin(seed + 31, x / scale, z / scale);
+        double wz = z / scale + WARP * perlin(seed + 32, x / scale, z / scale);
+        double edge = perlinFbm(seed, wx, wz, 3);
+        double effective = r * (1.0 + (edge > 0 ? EDGE_WOBBLE : INWARD_WOBBLE) * edge);
         if (dist >= effective) {
             return false;
         }
         double d = dist / effective; // 0 at centre, 1 at edge
-        double bumps = fbm(p.seed() + 7, x / 14.0, z / 14.0);
-        double under = fbm(p.seed() + 13, x / 9.0, z / 9.0);
 
-        int top = centerY + (int) Math.round(p.topHeight() * (1.0 - d * d) + 1.5 * bumps);
-        // Inverted cone with a ragged underside, the classic floating island look.
-        int bottom = centerY - 2 - (int) Math.round(p.depth() * Math.pow(1.0 - d, 1.7) * (0.8 + 0.25 * under));
+        // Rolling hills on top (at most +0.45 x topHeight, inside the 2 x topHeight the layer allows for).
+        double hills = perlinFbm(seed + 7, x / (scale * 0.6), z / (scale * 0.6), 3);
+        int top = centerY + (int) Math.round(p.topHeight() * (1.0 - d * d)
+                + Math.max(1.5, p.topHeight() * 0.45) * hills);
+
+        // Underside: an inverted cone with broad lumps, plus narrow hanging spikes (ridged noise).
+        // Deepest possible is 1.45 x depth, inside the 2 x the layer's depth that callers allow for.
+        double lumps = perlinFbm(seed + 13, x / (scale * 0.4), z / (scale * 0.4), 3);
+        double ridge = 1.0 - Math.abs(perlin(seed + 17, x / 6.0, z / 6.0));
+        double spikes = Math.pow(ridge, 6.0);
+        double hang = p.depth() * (Math.pow(1.0 - d, 1.5) * (0.75 + 0.4 * lumps) + 0.3 * spikes * (1.0 - d));
+        int bottom = centerY - 2 - (int) Math.round(hang);
         if (top <= bottom) {
             top = bottom + 1;
         }
