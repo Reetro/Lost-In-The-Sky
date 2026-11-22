@@ -1,0 +1,9 @@
+{
+  "layer": "lost_in_the_sky:high",
+  "biome": "minecraft:frozen_peaks",
+  "weight": 1,
+  "top": { "Name": "minecraft:packed_ice" },
+  "filler": { "Name": "minecraft:snow_block" },
+  "core": { "Name": "minecraft:stone" },
+  "filler_depth": 4
+}

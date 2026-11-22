@@ -1,0 +1,11 @@
+{
+  "layer": "lost_in_the_sky:high",
+  "chance": 0.12,
+  "sky_biomes": [ "lost_in_the_sky:high_grove" ],
+  "template": "minecraft:igloo/top",
+  "y_offset": 1,
+  "entities": [
+    { "type": "minecraft:evoker", "offset": [0, 0, 0], "persistent": true },
+    { "type": "minecraft:stray", "offset": [0, 0, 4], "count": 2, "persistent": true }
+  ]
+}

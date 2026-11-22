@@ -1,0 +1,11 @@
+{
+  "layer": "lost_in_the_sky:high",
+  "biome": "minecraft:grove",
+  "weight": 3,
+  "top": { "Name": "minecraft:snow_block" },
+  "filler": { "Name": "minecraft:dirt" },
+  "core": { "Name": "minecraft:stone" },
+  "decorations": [
+    { "feature": "minecraft:spruce", "tries": 3, "chance": 0.5 }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "structures": [
+    { "structure": "lost_in_the_sky:sky_outpost", "weight": 1 }
+  ],
+  "placement": {
+    "type": "minecraft:random_spread",
+    "spacing": 40,
+    "separation": 16,
+    "salt": 918273645
+  }
+}

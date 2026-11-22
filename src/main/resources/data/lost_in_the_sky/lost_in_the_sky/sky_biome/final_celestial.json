@@ -1,0 +1,13 @@
+{
+  "layer": "lost_in_the_sky:final",
+  "biome": "lost_in_the_sky:celestial_isles",
+  "weight": 1,
+  "top": { "Name": "minecraft:moss_block" },
+  "filler": { "Name": "minecraft:calcite" },
+  "core": { "Name": "minecraft:end_stone" },
+  "filler_depth": 4,
+  "decorations": [
+    { "feature": "minecraft:azalea_tree", "tries": 2, "chance": 0.4 },
+    { "feature": "minecraft:amethyst_geode", "tries": 1, "chance": 0.1 }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "layer": "lost_in_the_sky:lower",
+  "biome": "minecraft:birch_forest",
+  "weight": 2,
+  "decorations": [
+    { "feature": "minecraft:patch_grass", "tries": 4 },
+    { "feature": "minecraft:birch", "tries": 4, "chance": 0.6 }
+  ]
+}

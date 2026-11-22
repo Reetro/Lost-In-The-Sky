@@ -1,0 +1,9 @@
+{
+  "layer": "lost_in_the_sky:final",
+  "chance": 0.08,
+  "y_offset": 1,
+  "entities": [
+    { "type": "minecraft:ravager", "persistent": true },
+    { "type": "minecraft:vindicator", "offset": [3, 0, 0], "count": 3, "persistent": true }
+  ]
+}

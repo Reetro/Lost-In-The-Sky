@@ -1,0 +1,9 @@
+{
+  "layer": "lost_in_the_sky:regular",
+  "biome": "minecraft:flower_forest",
+  "weight": 2,
+  "decorations": [
+    { "feature": "minecraft:flower_default", "tries": 4 },
+    { "feature": "minecraft:oak", "tries": 3, "chance": 0.5 }
+  ]
+}

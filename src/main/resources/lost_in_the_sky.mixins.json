@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.reetro.lostinthesky.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "ChunkAccessMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
