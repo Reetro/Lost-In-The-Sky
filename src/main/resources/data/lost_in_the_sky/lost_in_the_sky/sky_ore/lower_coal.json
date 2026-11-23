@@ -1,6 +1,6 @@
 {
   "layer": "lost_in_the_sky:lower",
   "block": "minecraft:coal_ore",
-  "chance": 0.025,
+  "chance": 0.0225,
   "vein_size": 8
 }

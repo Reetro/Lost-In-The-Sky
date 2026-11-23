@@ -51,8 +51,6 @@ public final class SkyWorld {
     private static final int BIOME_ABOVE = 12;
     private static final int BIOME_BELOW = 4;
     private static final int CACHE_LIMIT = 250_000;
-    /** Minimum open-sky gap (seen from above) between islands of different layers. 0 = they may touch. */
-    private static final int STACK_GAP = 0;
 
     private static volatile SkyWorld instance;
 
@@ -291,7 +289,6 @@ public final class SkyWorld {
     /** Top block Y of the island in {@code layer} at x/z, or null if there is no island there. */
     @Nullable
     public Integer surfaceAt(CompiledLayer layer, int x, int z) {
-        int[] column = new int[2];
         Integer best = null;
         int cs = layer.def.cellSize();
         int cellX = Math.floorDiv(x, cs);
@@ -299,8 +296,13 @@ public final class SkyWorld {
         for (int ox = -1; ox <= 1; ox++) {
             for (int oz = -1; oz <= 1; oz++) {
                 Island island = island(layer, cellX + ox, cellZ + oz);
-                if (island != null && IslandMath.column(island.plan, island.centerY, x, z, column)) {
-                    best = best == null ? column[0] : Math.max(best, column[0]);
+                if (island == null) {
+                    continue;
+                }
+                IslandMath.Column column = IslandMath.column(island.plan, island.centerY, x, z);
+                int top = column == null ? Integer.MIN_VALUE : column.surface();
+                if (top != Integer.MIN_VALUE) {
+                    best = best == null ? top : Math.max(best, top);
                 }
             }
         }
@@ -394,8 +396,9 @@ public final class SkyWorld {
     }
 
     /**
-     * Islands never sit directly over the layer below: if this island's footprint would overlap an
-     * island in the next layer down, that one wins and this one is dropped. Only the layer directly
+     * Islands never sit directly over the layer below: if this island would sit too squarely over an
+     * island in the next layer down ({@link IslandMath#STACK_FACTOR}: edges may overlap, centres may
+     * not), that one wins and this one is dropped. Only the layer directly
      * below is checked (checking every lower layer left the final layer ~94% empty). Lower layers
      * only, so the recursion through {@link #island} always ends at the bottom layer and the result
      * is deterministic.
@@ -407,7 +410,7 @@ public final class SkyWorld {
         CompiledLayer lower = layers.get(layer.index - 1);
         int cs = lower.def.cellSize();
         int lowerMaxR = Math.min(lower.shape.maxRadius(), lower.shape.safeMaxRadius());
-        int range = (int) Math.ceil(IslandMath.reach(plan) + lowerMaxR * (1.0 + IslandMath.EDGE_WOBBLE) + STACK_GAP);
+        int range = (int) Math.ceil(IslandMath.reach(plan) + lowerMaxR * (1.0 + IslandMath.EDGE_WOBBLE));
         int minCellX = Math.floorDiv(plan.centerX() - range, cs);
         int maxCellX = Math.floorDiv(plan.centerX() + range, cs);
         int minCellZ = Math.floorDiv(plan.centerZ() - range, cs);
@@ -415,7 +418,7 @@ public final class SkyWorld {
         for (int cx = minCellX; cx <= maxCellX; cx++) {
             for (int cz = minCellZ; cz <= maxCellZ; cz++) {
                 Island other = island(lower, cx, cz);
-                if (other != null && IslandMath.footprintsOverlap(plan, other.plan, STACK_GAP)) {
+                if (other != null && IslandMath.stacked(plan, other.plan)) {
                     return true;
                 }
             }

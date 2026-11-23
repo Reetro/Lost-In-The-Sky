@@ -4,10 +4,10 @@
   "max_y": 420,
   "y_jitter": 12,
   "cell_size": 224,
-  "chance": 0.25,
+  "chance": 0.4,
   "min_radius": 36,
   "max_radius": 90,
   "top_height": 8,
   "depth": 50,
-  "cave_chance": 0.3
+  "cave_chance": 0.5
 }

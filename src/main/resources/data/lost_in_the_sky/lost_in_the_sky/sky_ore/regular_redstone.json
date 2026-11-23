@@ -1,6 +1,6 @@
 {
   "layer": "lost_in_the_sky:regular",
   "block": "minecraft:redstone_ore",
-  "chance": 0.012,
+  "chance": 0.0108,
   "vein_size": 6
 }

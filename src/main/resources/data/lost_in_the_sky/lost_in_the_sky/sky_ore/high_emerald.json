@@ -1,6 +1,6 @@
 {
   "layer": "lost_in_the_sky:high",
   "block": "minecraft:emerald_ore",
-  "chance": 0.004,
+  "chance": 0.0036,
   "vein_size": 3
 }

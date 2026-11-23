@@ -127,7 +127,7 @@ Pair it with a `worldgen/structure_set` file for spacing (see `sky_outpost`). Po
 ./gradlew runClient  # test in game
 ```
 
-Requires Java 21. The build pulls in Create, Sable and Create Aeronautics, same as `create-lost-in-the-dark`.
+Requires Java 21. The build pulls in Create, Sable, Create Aeronautics, Create Big Cannons and Ritchie's Projectile Library.
 
 ## Status
 

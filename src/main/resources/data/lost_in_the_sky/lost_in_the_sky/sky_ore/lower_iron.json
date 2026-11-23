@@ -1,6 +1,6 @@
 {
   "layer": "lost_in_the_sky:lower",
   "block": "minecraft:iron_ore",
-  "chance": 0.015,
+  "chance": 0.0135,
   "vein_size": 6
 }

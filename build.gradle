@@ -25,6 +25,10 @@ repositories {
         url = "https://api.modrinth.com/maven" // Sable, Create Aeronautics
         content { includeGroup "maven.modrinth" }
     }
+    maven {
+        url = "https://cursemaven.com" // CurseForge files: Create Big Cannons, RPL
+        content { includeGroup "curse.maven" }
+    }
 }
 
 base {
@@ -79,6 +83,10 @@ dependencies {
 
     implementation("maven.modrinth:sable:${sable_version}") { transitive = false }
     implementation("maven.modrinth:create-aeronautics:${aeronautics_version}") { transitive = false }
+
+    // Create Big Cannons, and Ritchie's Projectile Library which it requires (both from CurseForge).
+    implementation("curse.maven:create-big-cannons-646668:${cbc_file_id}") { transitive = false }
+    implementation("curse.maven:ritchies-projectile-library-1279407:${rpl_file_id}") { transitive = false }
 }
 
 var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {

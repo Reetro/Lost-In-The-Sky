@@ -12,5 +12,5 @@
   "use_expansion_hack": true,
   "island_center": true,
   "min_island_radius": 60,
-  "island_chance": 0.4
+  "island_chance": 0.5
 }

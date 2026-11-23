@@ -54,3 +54,13 @@ config="${mod_id}.mixins.json"
     versionRange="[1.3.0,)"
     ordering="AFTER"
     side="BOTH"
+
+# Create Big Cannons: sky islands are meant to be fought over with airship gunships.
+# CBC itself requires Ritchie's Projectile Library ("ritchiesprojectilelib").
+[[dependencies.${mod_id}]]
+    modId="createbigcannons"
+    type="required"
+    reason="Lost in the Sky is built around armed airships and needs Create Big Cannons."
+    versionRange="[5.11.7,)"
+    ordering="AFTER"
+    side="BOTH"
