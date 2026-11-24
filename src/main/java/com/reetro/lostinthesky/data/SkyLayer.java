@@ -21,9 +21,14 @@ import net.minecraft.util.StringRepresentable;
  * @param topHeight  height of the domed top above the island's centre
  * @param depth      how far the rocky underside hangs below the island's centre
  * @param caveChance chance that an island has caves winding through it (0-1)
+ * @param mirrorGroundBiome if true, each island takes the ground biome under its centre (oceans and
+ *                   rivers excepted): that biome is painted on it, its top blocks are copied from
+ *                   the ground directly below each column, and the biome's own vegetation grows on
+ *                   it. The layer's sky biomes are still used over water and as fallback blocks.
  */
 public record SkyLayer(Anchor anchor, int offset, int maxY, int yJitter, int cellSize, float chance,
-                       int minRadius, int maxRadius, int topHeight, int depth, float caveChance) {
+                       int minRadius, int maxRadius, int topHeight, int depth, float caveChance,
+                       boolean mirrorGroundBiome) {
 
     public static final Codec<SkyLayer> CODEC = RecordCodecBuilder.create(i -> i.group(
             Anchor.CODEC.optionalFieldOf("anchor", Anchor.SEA_LEVEL).forGetter(SkyLayer::anchor),
@@ -36,7 +41,8 @@ public record SkyLayer(Anchor anchor, int offset, int maxY, int yJitter, int cel
             Codec.intRange(4, 512).optionalFieldOf("max_radius", 64).forGetter(SkyLayer::maxRadius),
             Codec.intRange(1, 128).optionalFieldOf("top_height", 8).forGetter(SkyLayer::topHeight),
             Codec.intRange(4, 256).optionalFieldOf("depth", 40).forGetter(SkyLayer::depth),
-            Codec.floatRange(0f, 1f).optionalFieldOf("cave_chance", 0.4f).forGetter(SkyLayer::caveChance)
+            Codec.floatRange(0f, 1f).optionalFieldOf("cave_chance", 0.4f).forGetter(SkyLayer::caveChance),
+            Codec.BOOL.optionalFieldOf("mirror_ground_biome", false).forGetter(SkyLayer::mirrorGroundBiome)
     ).apply(i, SkyLayer::new));
 
     public IslandMath.LayerShape shape() {

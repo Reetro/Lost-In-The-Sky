@@ -3,12 +3,14 @@ package com.reetro.lostinthesky.world;
 import com.mojang.datafixers.util.Pair;
 import com.reetro.lostinthesky.LostInTheSky;
 import com.reetro.lostinthesky.data.SkyBiome;
+import com.reetro.lostinthesky.data.SkyCaveBiome;
 import com.reetro.lostinthesky.data.SkyEncounter;
 import com.reetro.lostinthesky.data.SkyLayer;
 import com.reetro.lostinthesky.data.SkyOre;
 import com.reetro.lostinthesky.data.SkyRegistries;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
+import net.minecraft.core.QuartPos;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -17,6 +19,7 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.BiomeTags;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
@@ -24,6 +27,7 @@ import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.levelgen.RandomState;
 import net.minecraft.world.level.levelgen.feature.ConfiguredFeature;
+import net.neoforged.neoforge.common.Tags;
 import net.neoforged.neoforge.server.ServerLifecycleHooks;
 import org.jetbrains.annotations.Nullable;
 
@@ -50,7 +54,13 @@ public final class SkyWorld {
     /** Island biomes reach this far above an island's top, so the air just above it uses the island's sky/fog. */
     private static final int BIOME_ABOVE = 12;
     private static final int BIOME_BELOW = 4;
+    /**
+     * Cave biomes start this many blocks under an island's surface (at the middle of a 4x4x4 biome
+     * cell), so the surface blocks and the air above keep the sky biome.
+     */
+    private static final int CAVE_BIOME_DEPTH = 4;
     private static final int CACHE_LIMIT = 250_000;
+    private static final int CAVE_CACHE_LIMIT = 4_096;
 
     private static volatile SkyWorld instance;
 
@@ -58,6 +68,7 @@ public final class SkyWorld {
     private final long seed;
     private final List<CompiledLayer> layers;
     private final Map<Long, Optional<Island>> islandCache = new ConcurrentHashMap<>();
+    private final Map<Long, IslandMath.Caves> caveCache = new ConcurrentHashMap<>();
     private volatile boolean warnedNoOverworld;
 
     // ------------------------------------------------------------------ lifecycle
@@ -158,6 +169,30 @@ public final class SkyWorld {
             layer.ores.add(new CompiledOre(entry.getKey().location(), def, block.get().defaultBlockState()));
         }
 
+        for (Map.Entry<ResourceKey<SkyCaveBiome>, SkyCaveBiome> entry : access.registryOrThrow(SkyRegistries.SKY_CAVE_BIOME).entrySet()) {
+            SkyCaveBiome def = entry.getValue();
+            CompiledLayer layer = find(layers, def.layer());
+            if (layer == null) {
+                LostInTheSky.LOGGER.warn("Sky cave biome {} names unknown layer {}", entry.getKey().location(), def.layer());
+                continue;
+            }
+            Optional<Holder.Reference<Biome>> biome = biomes.getHolder(def.biome());
+            if (biome.isEmpty()) {
+                LostInTheSky.LOGGER.warn("Sky cave biome {} uses unknown biome {}", entry.getKey().location(), def.biome().location());
+                continue;
+            }
+            List<CompiledCaveDecoration> decorations = new ArrayList<>();
+            for (SkyCaveBiome.Decoration decoration : def.decorations()) {
+                Optional<Holder.Reference<ConfiguredFeature<?, ?>>> feature = features.getHolder(decoration.feature());
+                if (feature.isPresent()) {
+                    decorations.add(new CompiledCaveDecoration(feature.get(), decoration.placement(), decoration.tries(), decoration.chance()));
+                } else {
+                    LostInTheSky.LOGGER.warn("Sky cave biome {} uses unknown feature {}", entry.getKey().location(), decoration.feature().location());
+                }
+            }
+            layer.caveBiomes.add(new CompiledCaveBiome(entry.getKey().location(), def, biome.get(), decorations));
+        }
+
         // Registry order isn't guaranteed to be stable between runs, but island contents must be.
         for (CompiledLayer layer : layers) {
             layer.ores.sort(Comparator.comparing(o -> o.id.toString()));
@@ -165,7 +200,10 @@ public final class SkyWorld {
             layer.biomes.sort(Comparator.comparing(b -> b.id.toString()));
             layer.encounters.sort(Comparator.comparing(e -> e.id.toString()));
             layer.totalWeight = layer.biomes.stream().mapToInt(b -> b.def.weight()).sum();
-            LostInTheSky.LOGGER.info("Sky layer {}: {} biomes, {} encounters, {} ores", layer.id, layer.biomes.size(), layer.encounters.size(), layer.ores.size());
+            layer.caveBiomes.sort(Comparator.comparing(b -> b.id.toString()));
+            layer.totalCaveWeight = layer.caveBiomes.stream().mapToInt(b -> b.def.weight()).sum();
+            LostInTheSky.LOGGER.info("Sky layer {}: {} biomes, {} cave biomes, {} encounters, {} ores", layer.id,
+                    layer.biomes.size(), layer.caveBiomes.size(), layer.encounters.size(), layer.ores.size());
         }
 
         long seed = server.getWorldData().worldGenOptions().seed();
@@ -193,12 +231,15 @@ public final class SkyWorld {
         return find(layers, id);
     }
 
-    /** Biome for a block position inside a sky island, or null to keep the normal biome. */
+    /**
+     * Biome for a block position inside a sky island, or null to keep the normal biome. A cave
+     * island's interior (more than {@link #CAVE_BIOME_DEPTH} blocks under its surface) gets its cave
+     * biome; the rest of the island and the air just around it get its sky biome.
+     */
     @Nullable
     public Holder<Biome> skyBiomeAt(int x, int y, int z) {
-        int[] column = new int[2];
         for (CompiledLayer layer : layers) {
-            if (layer.biomes.isEmpty() || y < layer.minPossibleY() || y > layer.maxPossibleY()) {
+            if ((layer.biomes.isEmpty() && layer.caveBiomes.isEmpty()) || y < layer.minPossibleY() || y > layer.maxPossibleY()) {
                 continue;
             }
             int cs = layer.def.cellSize();
@@ -207,17 +248,45 @@ public final class SkyWorld {
             for (int ox = -1; ox <= 1; ox++) {
                 for (int oz = -1; oz <= 1; oz++) {
                     Island island = island(layer, cellX + ox, cellZ + oz);
-                    if (island == null || island.biome == null) {
+                    Holder<Biome> surfaceBiome = island == null ? null : island.surfaceBiome();
+                    if (island == null || (surfaceBiome == null && island.caveBiome == null)) {
                         continue;
                     }
-                    if (IslandMath.column(island.plan, island.centerY, x, z, column)
-                            && y >= column[1] - BIOME_BELOW && y <= column[0] + BIOME_ABOVE) {
-                        return island.biome.holder;
+                    IslandMath.Column column = IslandMath.column(island.plan, island.centerY, x, z);
+                    if (column == null || y < column.bottom - BIOME_BELOW || y > column.top + BIOME_ABOVE) {
+                        continue;
+                    }
+                    if (island.caveBiome != null && y >= column.bottom && y <= column.top - CAVE_BIOME_DEPTH) {
+                        int surface = column.surface();
+                        if (surface != Integer.MIN_VALUE && y <= surface - CAVE_BIOME_DEPTH) {
+                            return island.caveBiome.holder;
+                        }
+                    }
+                    if (surfaceBiome != null) {
+                        return surfaceBiome;
                     }
                 }
             }
         }
         return null;
+    }
+
+    /** The island's caves (built on first use, then cached), or null if it has none. */
+    @Nullable
+    public IslandMath.Caves caves(Island island) {
+        if (!IslandMath.hasCaves(island.plan, island.layer.def.caveChance())) {
+            return null;
+        }
+        long key = islandKey(island.layer, island.plan.cellX(), island.plan.cellZ());
+        IslandMath.Caves caves = caveCache.get(key);
+        if (caves == null) {
+            if (caveCache.size() > CAVE_CACHE_LIMIT) {
+                caveCache.clear();
+            }
+            caves = IslandMath.Caves.build(island.plan, island.centerY);
+            caveCache.put(key, caves);
+        }
+        return caves;
     }
 
     /** Calls {@code action} for every island in {@code layer} that could cross block column x/z's cell neighbourhood. */
@@ -248,7 +317,9 @@ public final class SkyWorld {
         Island best = null;
         double bestDist = radius;
         for (CompiledLayer layer : layers) {
-            if (layer.biomes.stream().noneMatch(b -> biomes.test(b.holder))) {
+            if (!layer.def.mirrorGroundBiome()
+                    && layer.biomes.stream().noneMatch(b -> biomes.test(b.holder))
+                    && layer.caveBiomes.stream().noneMatch(b -> biomes.test(b.holder))) {
                 continue;
             }
             int cs = layer.def.cellSize();
@@ -266,7 +337,7 @@ public final class SkyWorld {
                             continue;
                         }
                         Island island = island(layer, cellX + ox, cellZ + oz);
-                        if (island == null || island.biome == null || !biomes.test(island.biome.holder)) {
+                        if (island == null || matchingBiome(island, biomes) == null) {
                             continue;
                         }
                         double dist = Math.hypot(island.plan.centerX() - from.getX(), island.plan.centerZ() - from.getZ());
@@ -281,9 +352,29 @@ public final class SkyWorld {
         if (best == null) {
             return null;
         }
-        Integer top = surfaceAt(best.layer, best.plan.centerX(), best.plan.centerZ());
-        int y = top == null ? best.centerY : top + 1;
-        return Pair.of(new BlockPos(best.plan.centerX(), y, best.plan.centerZ()), best.biome.holder);
+        Holder<Biome> found = matchingBiome(best, biomes);
+        int y;
+        if (found == best.surfaceBiome()) {
+            Integer top = surfaceAt(best.layer, best.plan.centerX(), best.plan.centerZ());
+            y = top == null ? best.centerY : top + 1;
+        } else {
+            // A cave biome: point inside the island, where the caves are.
+            y = best.centerY - best.plan.depth() / 4;
+        }
+        return Pair.of(new BlockPos(best.plan.centerX(), y, best.plan.centerZ()), found);
+    }
+
+    /** The island's sky biome or cave biome that matches, or null. */
+    @Nullable
+    private static Holder<Biome> matchingBiome(Island island, Predicate<Holder<Biome>> biomes) {
+        Holder<Biome> surface = island.surfaceBiome();
+        if (surface != null && biomes.test(surface)) {
+            return surface;
+        }
+        if (island.caveBiome != null && biomes.test(island.caveBiome.holder)) {
+            return island.caveBiome.holder;
+        }
+        return null;
     }
 
     /** Top block Y of the island in {@code layer} at x/z, or null if there is no island there. */
@@ -336,7 +427,7 @@ public final class SkyWorld {
     /** The island in one cell of a layer, or null. Results are cached. */
     @Nullable
     public Island island(CompiledLayer layer, int cellX, int cellZ) {
-        long key = ((long) layer.index << 58) ^ (((long) cellX & 0x1FFFFFFFL) << 29) ^ ((long) cellZ & 0x1FFFFFFFL);
+        long key = islandKey(layer, cellX, cellZ);
         Optional<Island> cached = islandCache.get(key);
         if (cached != null) {
             return cached.orElse(null);
@@ -347,6 +438,10 @@ public final class SkyWorld {
         Optional<Island> resolved = Optional.ofNullable(resolve(layer, cellX, cellZ));
         islandCache.put(key, resolved);
         return resolved.orElse(null);
+    }
+
+    private static long islandKey(CompiledLayer layer, int cellX, int cellZ) {
+        return ((long) layer.index << 58) ^ (((long) cellX & 0x1FFFFFFFL) << 29) ^ ((long) cellZ & 0x1FFFFFFFL);
     }
 
     @Nullable
@@ -379,6 +474,24 @@ public final class SkyWorld {
             }
         }
 
+        Holder<Biome> groundBiome = null;
+        if (layer.def.mirrorGroundBiome()) {
+            int ground = layer.def.anchor() == SkyLayer.Anchor.SURFACE ? base : terrainHeight(plan.centerX(), plan.centerZ());
+            groundBiome = groundBiome(plan.centerX(), ground - 1, plan.centerZ());
+        }
+
+        CompiledCaveBiome caveBiome = null;
+        if (layer.totalCaveWeight > 0 && IslandMath.hasCaves(plan, layer.def.caveChance())) {
+            int roll = (int) Math.floor(IslandMath.unit(IslandMath.mix(plan.seed() + 2000L)) * layer.totalCaveWeight);
+            for (CompiledCaveBiome candidate : layer.caveBiomes) {
+                roll -= candidate.def.weight();
+                if (roll < 0) {
+                    caveBiome = candidate;
+                    break;
+                }
+            }
+        }
+
         CompiledEncounter encounter = null;
         for (int i = 0; i < layer.encounters.size(); i++) {
             CompiledEncounter candidate = layer.encounters.get(i);
@@ -392,7 +505,7 @@ public final class SkyWorld {
                 break;
             }
         }
-        return new Island(layer, plan, centerY, biome, encounter);
+        return new Island(layer, plan, centerY, biome, groundBiome, caveBiome, encounter);
     }
 
     /**
@@ -424,6 +537,26 @@ public final class SkyWorld {
             }
         }
         return false;
+    }
+
+    /**
+     * The overworld generator's surface biome at a block, for {@code mirror_ground_biome} layers, or
+     * null over oceans and rivers (an island can't be water) or if the biome is an underground one.
+     */
+    @Nullable
+    private Holder<Biome> groundBiome(int x, int y, int z) {
+        ServerLevel overworld = server.overworld();
+        if (overworld == null) {
+            return null;
+        }
+        ChunkGenerator generator = overworld.getChunkSource().getGenerator();
+        RandomState randomState = overworld.getChunkSource().randomState();
+        Holder<Biome> biome = generator.getBiomeSource().getNoiseBiome(
+                QuartPos.fromBlock(x), QuartPos.fromBlock(y), QuartPos.fromBlock(z), randomState.sampler());
+        if (biome.is(BiomeTags.IS_OCEAN) || biome.is(BiomeTags.IS_RIVER) || biome.is(Tags.Biomes.IS_UNDERGROUND)) {
+            return null;
+        }
+        return biome;
     }
 
     private int seaLevel() {
@@ -460,17 +593,20 @@ public final class SkyWorld {
         final List<CompiledBiome> biomes;
         final List<CompiledEncounter> encounters;
         final List<CompiledOre> ores;
+        final List<CompiledCaveBiome> caveBiomes;
         /** Per ore: chance a 4x4x4 cell holds a vein, and the vein size (see {@link IslandMath#oreAt}). */
         double[] oreCellChance = new double[0];
         int[] oreVeinSize = new int[0];
         int totalWeight;
+        int totalCaveWeight;
 
         CompiledLayer(int index, ResourceLocation id, SkyLayer def, long salt) {
-            this(index, id, def, salt, new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
+            this(index, id, def, salt, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
         }
 
         private CompiledLayer(int index, ResourceLocation id, SkyLayer def, long salt,
-                              List<CompiledBiome> biomes, List<CompiledEncounter> encounters, List<CompiledOre> ores) {
+                              List<CompiledBiome> biomes, List<CompiledEncounter> encounters, List<CompiledOre> ores,
+                              List<CompiledCaveBiome> caveBiomes) {
             this.index = index;
             this.id = id;
             this.def = def;
@@ -479,10 +615,11 @@ public final class SkyWorld {
             this.biomes = biomes;
             this.encounters = encounters;
             this.ores = ores;
+            this.caveBiomes = caveBiomes;
         }
 
         CompiledLayer withIndex(int newIndex) {
-            return new CompiledLayer(newIndex, id, def, salt, biomes, encounters, ores);
+            return new CompiledLayer(newIndex, id, def, salt, biomes, encounters, ores, caveBiomes);
         }
 
         void compileOres() {
@@ -534,14 +671,33 @@ public final class SkyWorld {
     public record CompiledDecoration(Holder<ConfiguredFeature<?, ?>> feature, int tries, float chance) {
     }
 
+    public record CompiledCaveBiome(ResourceLocation id, SkyCaveBiome def, Holder<Biome> holder,
+                                    List<CompiledCaveDecoration> decorations) {
+    }
+
+    public record CompiledCaveDecoration(Holder<ConfiguredFeature<?, ?>> feature, SkyCaveBiome.Placement placement,
+                                         int tries, float chance) {
+    }
+
     public record CompiledEncounter(ResourceLocation id, SkyEncounter def) {
     }
 
     public record CompiledOre(ResourceLocation id, SkyOre def, BlockState state) {
     }
 
-    /** A placed island: its shape, resting height, biome and optional encounter. */
-    public record Island(CompiledLayer layer, IslandMath.Plan plan, int centerY,
-                         @Nullable CompiledBiome biome, @Nullable CompiledEncounter encounter) {
+    /**
+     * A placed island: its shape, resting height, sky biome, mirrored ground biome (only on
+     * {@code mirror_ground_biome} layers, and not over water), cave biome (cave islands only) and
+     * optional encounter.
+     */
+    public record Island(CompiledLayer layer, IslandMath.Plan plan, int centerY, @Nullable CompiledBiome biome,
+                         @Nullable Holder<Biome> groundBiome, @Nullable CompiledCaveBiome caveBiome,
+                         @Nullable CompiledEncounter encounter) {
+
+        /** The biome painted on the island's surface: the mirrored ground biome if any, else the sky biome. */
+        @Nullable
+        public Holder<Biome> surfaceBiome() {
+            return groundBiome != null ? groundBiome : biome != null ? biome.holder : null;
+        }
     }
 }

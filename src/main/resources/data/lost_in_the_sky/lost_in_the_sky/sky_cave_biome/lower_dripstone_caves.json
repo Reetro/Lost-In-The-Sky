@@ -1,0 +1,11 @@
+{
+  "layer": "lost_in_the_sky:lower",
+  "biome": "minecraft:dripstone_caves",
+  "weight": 1,
+  "decorations": [
+    { "feature": "minecraft:dripstone_cluster", "placement": "air", "tries": 14 },
+    { "feature": "minecraft:large_dripstone", "placement": "air", "tries": 5 },
+    { "feature": "minecraft:pointed_dripstone", "placement": "air", "tries": 48 },
+    { "feature": "minecraft:glow_lichen", "placement": "air", "tries": 8 }
+  ]
+}

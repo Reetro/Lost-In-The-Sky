@@ -14,17 +14,13 @@ public final class IslandMath {
     /** Narrowest an island gets across its short axis, as a fraction of its long axis. */
     private static final double MIN_ASPECT = 0.5;
     /** Solid blocks kept above any cave, under an island's surface. */
-    private static final int CAVE_ROOF = 4;
-    /** Tunnel radius in noise units (bigger = wider tunnels). */
-    private static final double TUNNEL_WIDTH = 0.13;
-    /** Deepest a surface entrance shaft goes looking for a cave. */
-    private static final int SHAFT_MAX_DEPTH = 32;
-    /** Coarse entrance mask: higher = fewer areas with entrances. */
-    private static final double ENTRANCE_AREA = 0.32;
-    /** Fine entrance mask: higher = fewer, smaller holes. */
-    private static final double ENTRANCE_HOLE = 0.45;
-    /** Chamber noise above this is hollow (lower = more and bigger chambers). */
-    private static final double CHAMBER_THRESHOLD = 0.4;
+    public static final int CAVE_ROOF = 4;
+    /** Chamber density above this is hollow (lower = more and bigger chambers). */
+    private static final double CHAMBER_THRESHOLD = 0.42;
+    /** How far the crag field moves a chamber wall, in density units (higher = more jagged). */
+    private static final double CHAMBER_JAG = 0.12;
+    /** Pillar field above this stays rock inside chambers (lower = more, thicker pillars). */
+    private static final double PILLAR_THRESHOLD = 0.55;
 
     private IslandMath() {
     }
@@ -324,44 +320,400 @@ public final class IslandMath {
     }
 
     /**
-     * True if a block inside a cave island is cave (left as air). Winding tunnels where two 3D
-     * Perlin fields both cross zero ("spaghetti" caves), plus the occasional larger chamber. The top
-     * {@link #CAVE_ROOF} blocks of each column stay solid so the surface is never holed; tunnels may
-     * open out through the sides and underside, which makes the entrances.
+     * Trilinear value noise in [-1, 1]: random values on a lattice, joined by straight lines (no
+     * smoothing curve). The straight joins leave creases along the lattice planes, so a surface cut
+     * by this noise looks faceted and broken, like split rock, instead of smooth like Perlin.
      */
-    public static boolean caveAt(Plan p, int x, int y, int z, int top) {
-        if (y > top - CAVE_ROOF) {
-            return false;
-        }
-        long seed = p.seed();
-        double a = perlin3(seed + 51, x / 44.0, y / 26.0, z / 44.0);
-        double b = perlin3(seed + 52, x / 44.0, y / 26.0, z / 44.0);
-        if (a * a + b * b < TUNNEL_WIDTH * TUNNEL_WIDTH) {
-            return true;
-        }
-        return perlin3(seed + 53, x / 38.0, y / 20.0, z / 38.0) > CHAMBER_THRESHOLD;
+    public static double value3(long seed, double x, double y, double z) {
+        int x0 = (int) Math.floor(x);
+        int y0 = (int) Math.floor(y);
+        int z0 = (int) Math.floor(z);
+        double fx = x - x0;
+        double fy = y - y0;
+        double fz = z - z0;
+        double c000 = lattice3(seed, x0, y0, z0);
+        double c100 = lattice3(seed, x0 + 1, y0, z0);
+        double c010 = lattice3(seed, x0, y0 + 1, z0);
+        double c110 = lattice3(seed, x0 + 1, y0 + 1, z0);
+        double c001 = lattice3(seed, x0, y0, z0 + 1);
+        double c101 = lattice3(seed, x0 + 1, y0, z0 + 1);
+        double c011 = lattice3(seed, x0, y0 + 1, z0 + 1);
+        double c111 = lattice3(seed, x0 + 1, y0 + 1, z0 + 1);
+        return lerp(fz, lerp(fy, lerp(fx, c000, c100), lerp(fx, c010, c110)),
+                lerp(fy, lerp(fx, c001, c101), lerp(fx, c011, c111)));
+    }
+
+    private static double lattice3(long seed, int ix, int iy, int iz) {
+        return unit(hash(seed, ix, iz, 0x7A6L ^ (iy * 0x9E3779B97F4A7C15L))) * 2.0 - 1.0;
     }
 
     /**
-     * Surface cave entrance: in a few small patches of a cave island's top (two Perlin masks: a coarse
-     * one picks the areas, a fine one the holes), a shaft opens from the surface down to the nearest
-     * cave below. Only where a cave is within {@link #SHAFT_MAX_DEPTH} blocks, so there are no
-     * dead-end pits.
+     * Caves of one island, built once per island from its seed and resting height. Two parts:
      *
-     * @return the Y the shaft reaches down to (open from there to the top), or Integer.MAX_VALUE for none
+     * <ul>
+     *   <li><b>Perlin worms</b>, the main tunnels: each worm starts inside the island and crawls in
+     *   steps of {@link #WORM_STEP} blocks, its heading turned a little each step by 1D Perlin noise,
+     *   so it winds smoothly instead of zig-zagging. It is pulled back toward the island's middle
+     *   near the rim and toward its own depth when it climbs or dives too far, so most of it stays
+     *   inside. Its radius swells and pinches along its length, and some worms fork once.</li>
+     *   <li><b>Entrance worms</b>: a few short worms that start on a tunnel near the middle and
+     *   climb at 30-50 degrees until they come out of the island's top. They are the only part
+     *   allowed through the {@link #CAVE_ROOF}, so every cave island gets sloped, walkable openings
+     *   on its top surface.</li>
+     *   <li><b>Density functions</b>, as in vanilla's noise caves: each block gets a value from
+     *   several noise fields added together, and it is cave where that value crosses a threshold.
+     *   "Cheese" chambers come from two octaves of 3D Perlin, with rock pillars left standing where
+     *   a 2D field is high.</li>
+     * </ul>
+     *
+     * <p>Both are made jagged by the same "crag" field: two octaves of {@link #value3 value noise}
+     * (faceted, not smooth) added to every wall's distance, so tunnel and chamber walls get sharp
+     * ledges, notches and spurs a few blocks across, not round tubes. How much is rolled per island.
      */
-    public static int entranceFrom(Plan p, int x, int z, int top, int bottom) {
-        long seed = p.seed();
-        if (perlin(seed + 60, x / 48.0, z / 48.0) < ENTRANCE_AREA
-                || perlin(seed + 61, x / 9.0, z / 9.0) < ENTRANCE_HOLE) {
-            return Integer.MAX_VALUE;
+    public static final class Caves {
+        /** Blocks between worm nodes. */
+        static final double WORM_STEP = 1.5;
+        /** Size of the horizontal buckets that index worm nodes by column. */
+        private static final int BUCKET = 16;
+
+        final long seed;
+        /** How far the crag field pushes a wall, as a fraction of the tunnel radius. */
+        final double jag;
+        // Worm nodes: centre and radius.
+        private final double[] nx;
+        private final double[] ny;
+        private final double[] nz;
+        private final double[] nr;
+        /** True for entrance-worm nodes, which may cut through the roof to the surface. */
+        private final boolean[] entrance;
+        private final java.util.Map<Long, int[]> buckets;
+        private final int entrances;
+
+        private Caves(long seed, double jag, double[] nx, double[] ny, double[] nz, double[] nr,
+                      boolean[] entrance, java.util.Map<Long, int[]> buckets, int entrances) {
+            this.seed = seed;
+            this.jag = jag;
+            this.nx = nx;
+            this.ny = ny;
+            this.nz = nz;
+            this.nr = nr;
+            this.entrance = entrance;
+            this.buckets = buckets;
+            this.entrances = entrances;
         }
-        for (int y = top - CAVE_ROOF; y >= Math.max(bottom, top - SHAFT_MAX_DEPTH); y--) {
-            if (caveAt(p, x, y, z, top)) {
-                return y;
+
+        /** Number of entrance worms that reached the surface (for tests and stats). */
+        public int entranceCount() {
+            return entrances;
+        }
+
+        /** Number of worm nodes (for tests and stats). */
+        public int nodeCount() {
+            return nx.length;
+        }
+
+        /**
+         * Builds an island's caves.
+         *
+         * @param centerY the island's resting height (layer height + jitter)
+         */
+        public static Caves build(Plan p, int centerY) {
+            long seed = p.seed();
+            Shape s = p.shape();
+            double r = p.radius();
+            double depth = p.depth() * s.thickness();
+            double cos = Math.cos(s.angle());
+            double sin = Math.sin(s.angle());
+            double jag = between(seed + 300, 0.35, 0.6);
+            // Thicker islands get fatter tunnels.
+            double sizeScale = Math.max(0.8, Math.min(1.35, depth / 45.0));
+
+            java.util.List<double[]> nodes = new java.util.ArrayList<>();
+            int worms = 3 + (int) (r * r / 1200.0) + (unit(mix(seed + 301)) < 0.5 ? 1 : 0);
+            for (int w = 0; w < worms; w++) {
+                long hw = mix(seed + 310 + w * 23L);
+                // Start somewhere inside the middle of the main lobe, in the island's squashed frame.
+                double a = unit(mix(hw)) * Math.PI * 2.0;
+                double d = Math.sqrt(unit(mix(hw + 1))) * 0.45;
+                double u = Math.cos(a) * d;
+                double v = Math.sin(a) * d;
+                double x = p.centerX() + r * (u * cos - v * s.aspect() * sin);
+                double z = p.centerZ() + r * (u * sin + v * s.aspect() * cos);
+                double y = centerY - depth * between(hw + 2, 0.08, 0.4);
+                double yaw = unit(mix(hw + 3)) * Math.PI * 2.0;
+                int steps = (int) (r * between(hw + 4, 1.1, 2.0) / WORM_STEP);
+                double radius = between(hw + 5, 2.6, 4.2) * sizeScale;
+                int forkAt = unit(mix(hw + 6)) < 0.45 ? steps / 4 + (int) (unit(mix(hw + 7)) * steps / 2) : -1;
+                crawl(nodes, p, centerY, depth, hw, x, y, z, yaw, steps, radius, forkAt);
+            }
+
+            // Entrances: climb from tunnel nodes near the middle up and out through the top.
+            int tunnelNodes = nodes.size();
+            java.util.List<double[]> candidates = new java.util.ArrayList<>();
+            for (double[] node : nodes) {
+                double dx = node[0] - p.centerX();
+                double dz = node[2] - p.centerZ();
+                double u = (dx * cos + dz * sin) / r;
+                double v = (dz * cos - dx * sin) / s.aspect() / r;
+                if (u * u + v * v < 0.5 * 0.5) {
+                    candidates.add(node);
+                }
+            }
+            int wanted = 1 + worms / 2;
+            int made = 0;
+            for (int e = 0; e < wanted * 3 && made < wanted && !candidates.isEmpty(); e++) {
+                long he = mix(seed + 500 + e * 31L);
+                double[] from = candidates.get((int) (unit(mix(he)) * candidates.size()));
+                if (climb(nodes, p, centerY, he, from, between(he + 1, 2.0, 2.9) * sizeScale)) {
+                    made++;
+                }
+            }
+
+            int n = nodes.size();
+            double[] nx = new double[n];
+            double[] ny = new double[n];
+            double[] nz = new double[n];
+            double[] nr = new double[n];
+            boolean[] entrance = new boolean[n];
+            java.util.Map<Long, java.util.List<Integer>> lists = new java.util.HashMap<>();
+            for (int i = 0; i < n; i++) {
+                double[] node = nodes.get(i);
+                nx[i] = node[0];
+                ny[i] = node[1];
+                nz[i] = node[2];
+                nr[i] = node[3];
+                entrance[i] = i >= tunnelNodes;
+                double reach = node[3] * (1.0 + jag) + 1.0;
+                int bx0 = Math.floorDiv((int) Math.floor(node[0] - reach), BUCKET);
+                int bx1 = Math.floorDiv((int) Math.ceil(node[0] + reach), BUCKET);
+                int bz0 = Math.floorDiv((int) Math.floor(node[2] - reach), BUCKET);
+                int bz1 = Math.floorDiv((int) Math.ceil(node[2] + reach), BUCKET);
+                for (int bx = bx0; bx <= bx1; bx++) {
+                    for (int bz = bz0; bz <= bz1; bz++) {
+                        lists.computeIfAbsent(bucketKey(bx, bz), k -> new java.util.ArrayList<>()).add(i);
+                    }
+                }
+            }
+            java.util.Map<Long, int[]> buckets = new java.util.HashMap<>();
+            lists.forEach((k, list) -> buckets.put(k, list.stream().mapToInt(Integer::intValue).toArray()));
+            return new Caves(seed, jag, nx, ny, nz, nr, entrance, buckets, made);
+        }
+
+        /**
+         * One entrance worm: from a tunnel node, climb steeply (with a wandering heading, turned back
+         * toward the middle near the rim) until clear of the island's top. Nodes are only kept if it
+         * gets out through the top, so it never leaves a dead-end stub.
+         *
+         * @return true if it reached the surface
+         */
+        private static boolean climb(java.util.List<double[]> nodes, Plan p, int centerY, long he, double[] from, double radius) {
+            Shape s = p.shape();
+            double r = p.radius();
+            double cos = Math.cos(s.angle());
+            double sin = Math.sin(s.angle());
+            double x = from[0];
+            double y = from[1];
+            double z = from[2];
+            double yaw = unit(mix(he + 2)) * Math.PI * 2.0;
+            double pitch = between(he + 3, 0.55, 0.9);
+            java.util.List<double[]> path = new java.util.ArrayList<>();
+            for (int t = 0; t < 90; t++) {
+                double rad = radius * (1.0 + 0.3 * perlin(he + 4, t / 9.0, 0.5));
+                path.add(new double[]{x, y, z, rad});
+                Column column = IslandMath.column(p, centerY, (int) Math.floor(x), (int) Math.floor(z));
+                if (column == null) {
+                    return false; // wandered off the island's side
+                }
+                int surface = column.surface();
+                if (surface != Integer.MIN_VALUE && y > surface + rad) {
+                    nodes.addAll(path);
+                    return true;
+                }
+                yaw += 0.2 * perlin(he + 5, t / 10.0, 0.25);
+                double dx = x - p.centerX();
+                double dz = z - p.centerZ();
+                double u = (dx * cos + dz * sin) / r;
+                double v = (dz * cos - dx * sin) / s.aspect() / r;
+                double out = Math.sqrt(u * u + v * v);
+                if (out > 0.55) {
+                    double home = Math.atan2(-dz, -dx);
+                    yaw += Math.atan2(Math.sin(home - yaw), Math.cos(home - yaw)) * 0.3;
+                }
+                double climb = pitch + 0.15 * perlin(he + 6, t / 8.0, 0.75);
+                x += Math.cos(yaw) * Math.cos(climb) * WORM_STEP;
+                z += Math.sin(yaw) * Math.cos(climb) * WORM_STEP;
+                y += Math.sin(climb) * WORM_STEP;
+            }
+            return false;
+        }
+
+        /** Walks one worm (and, once, a fork of it), adding a node per step. */
+        private static void crawl(java.util.List<double[]> nodes, Plan p, int centerY, double depth, long hw,
+                                  double x, double y, double z, double yaw, int steps, double radius, int forkAt) {
+            Shape s = p.shape();
+            double r = p.radius();
+            double cos = Math.cos(s.angle());
+            double sin = Math.sin(s.angle());
+            // Each worm keeps to its own depth band, wandering up and down around it.
+            double homeY = y;
+            for (int t = 0; t < steps; t++) {
+                // Radius swells and pinches along the worm, and tapers to a point at both ends.
+                double taper = Math.min(1.0, Math.min((t + 2) / 6.0, (steps - t + 2) / 6.0));
+                double rad = radius * (1.0 + 0.45 * perlin(hw + 11, t / 11.0, 0.5)) * taper;
+                if (rad > 0.9) {
+                    nodes.add(new double[]{x, y, z, rad});
+                }
+
+                // Heading: turn rate from 1D Perlin, so the worm winds in long smooth curves.
+                yaw += 0.28 * perlin(hw + 12, t / 13.0, 0.25);
+                double target = homeY + depth * 0.18 * perlin(hw + 13, t / 40.0, 0.75);
+                double pitch = 0.35 * perlin(hw + 14, t / 17.0, 0.5) + Math.max(-0.5, Math.min(0.5, (target - y) / (depth * 0.25)));
+                pitch = Math.max(-0.75, Math.min(0.75, pitch));
+
+                // Near the rim, turn back toward the middle.
+                double dx = x - p.centerX();
+                double dz = z - p.centerZ();
+                double u = (dx * cos + dz * sin) / r;
+                double v = (dz * cos - dx * sin) / s.aspect() / r;
+                double out = Math.sqrt(u * u + v * v);
+                if (out > 0.6) {
+                    double home = Math.atan2(-dz, -dx);
+                    double diff = Math.atan2(Math.sin(home - yaw), Math.cos(home - yaw));
+                    yaw += diff * Math.min(0.35, (out - 0.6) * 0.8);
+                }
+
+                x += Math.cos(yaw) * Math.cos(pitch) * WORM_STEP;
+                z += Math.sin(yaw) * Math.cos(pitch) * WORM_STEP;
+                y += Math.sin(pitch) * WORM_STEP;
+                // Never climb into the top of the island (the roof is also kept by CaveColumn#cave).
+                y = Math.min(y, centerY + p.topHeight() * 0.3);
+
+                if (t == forkAt) {
+                    double side = unit(mix(hw + 15)) < 0.5 ? -1.0 : 1.0;
+                    crawl(nodes, p, centerY, depth, mix(hw + 16), x, y, z, yaw + side * between(hw + 17, 0.6, 1.4),
+                            (steps - t) * 2 / 3, radius * 0.75, -1);
+                }
             }
         }
-        return Integer.MAX_VALUE;
+
+        private static long bucketKey(int bx, int bz) {
+            return ((long) bx << 32) ^ (bz & 0xFFFFFFFFL);
+        }
+
+        /** The caves in one block column; cheap to query block by block. */
+        public CaveColumn column(int x, int z) {
+            int[] near = buckets.get(bucketKey(Math.floorDiv(x, BUCKET), Math.floorDiv(z, BUCKET)));
+            int count = 0;
+            int[] idx = near == null ? new int[0] : new int[near.length];
+            double[] h2 = new double[idx.length];
+            if (near != null) {
+                for (int i : near) {
+                    double dx = x - nx[i];
+                    double dz = z - nz[i];
+                    double d2 = dx * dx + dz * dz;
+                    double max = nr[i] * (1.0 + jag);
+                    if (d2 < max * max) {
+                        idx[count] = i;
+                        h2[count++] = d2;
+                    }
+                }
+            }
+            return new CaveColumn(this, x, z, java.util.Arrays.copyOf(idx, count), java.util.Arrays.copyOf(h2, count));
+        }
+    }
+
+    /** One block column of an island's caves (see {@link Caves}). */
+    public static final class CaveColumn {
+        private final Caves caves;
+        private final int x;
+        private final int z;
+        /** Worm nodes close enough to this column to matter, and their squared horizontal distance. */
+        private final int[] nodes;
+        private final double[] h2;
+        /** Pillar field for this column (2D, so pillars run straight up through chambers). */
+        private final double pillar;
+
+        private CaveColumn(Caves caves, int x, int z, int[] nodes, double[] h2) {
+            this.caves = caves;
+            this.x = x;
+            this.z = z;
+            this.nodes = nodes;
+            this.h2 = h2;
+            this.pillar = perlin(caves.seed + 55, x / 7.0, z / 7.0);
+        }
+
+        /**
+         * True if the block at y is cave (left as air). The top {@link #CAVE_ROOF} blocks under the
+         * surface stay solid except where an entrance worm comes out; caves may also open out
+         * through the island's sides and underside.
+         *
+         * @param top the column's surface Y
+         */
+        public boolean cave(int y, int top) {
+            boolean roof = y > top - CAVE_ROOF;
+            long seed = caves.seed;
+            double jag = caves.jag;
+            double crag = Double.NaN;
+
+            // Worms: distance to each nearby node, as a fraction of its radius, pushed by the crag field.
+            // Only entrance worms may cut through the roof.
+            for (int k = 0; k < nodes.length; k++) {
+                int i = nodes[k];
+                if (roof && !caves.entrance[i]) {
+                    continue;
+                }
+                double dy = y - caves.ny[i];
+                double d2 = h2[k] + dy * dy;
+                double rad = caves.nr[i];
+                double outer = rad * (1.0 + jag);
+                if (d2 >= outer * outer) {
+                    continue;
+                }
+                double inner = rad * (1.0 - jag);
+                if (d2 < inner * inner) {
+                    return true;
+                }
+                if (Double.isNaN(crag)) {
+                    crag = crag(seed, x, y, z);
+                }
+                double wall = rad * (1.0 + jag * crag);
+                if (d2 < wall * wall) {
+                    return true;
+                }
+            }
+
+            if (roof) {
+                return false;
+            }
+
+            // Chambers: a density function (two octaves of 3D Perlin, plus the crag field) over a threshold.
+            double big = perlin3(seed + 53, x / 34.0, y / 18.0, z / 34.0);
+            if (big + 0.35 + CHAMBER_JAG < CHAMBER_THRESHOLD) {
+                return false;
+            }
+            double density = big + 0.35 * perlin3(seed + 54, x / 12.0, y / 8.0, z / 12.0);
+            if (density + CHAMBER_JAG < CHAMBER_THRESHOLD) {
+                return false;
+            }
+            if (Double.isNaN(crag)) {
+                crag = crag(seed, x, y, z);
+            }
+            if (density + CHAMBER_JAG * crag < CHAMBER_THRESHOLD) {
+                return false;
+            }
+            // Rock pillars left standing inside chambers, with ragged sides.
+            return pillar + 0.25 * crag < PILLAR_THRESHOLD;
+        }
+
+        /** Faceted rock noise in about [-1, 1]: a coarse and a fine octave of {@link #value3}. */
+        private static double crag(long seed, int x, int y, int z) {
+            return 0.65 * value3(seed + 80, x / 5.0, y / 3.5, z / 5.0)
+                    + 0.35 * value3(seed + 81, x / 2.2, y / 1.8, z / 2.2);
+        }
+    }
+
+    private static double between(long h, double min, double max) {
+        return min + (max - min) * unit(mix(h));
     }
 
     /**

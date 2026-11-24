@@ -8,14 +8,18 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.levelgen.structure.Structure;
+import net.minecraft.world.level.levelgen.structure.StructurePiece;
 import net.minecraft.world.level.levelgen.structure.StructureType;
 import net.minecraft.world.level.levelgen.structure.pools.DimensionPadding;
 import net.minecraft.world.level.levelgen.structure.pools.JigsawPlacement;
 import net.minecraft.world.level.levelgen.structure.pools.StructureTemplatePool;
+import net.minecraft.world.level.levelgen.structure.pieces.StructurePiecesBuilder;
 import net.minecraft.world.level.levelgen.structure.pools.alias.PoolAliasLookup;
 import net.minecraft.world.level.levelgen.structure.templatesystem.LiquidSettings;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -31,7 +35,8 @@ import java.util.Optional;
  * villages stay on the island. Use it with a structure set of spacing 1 / separation 0: only the
  * chunk holding the island's centre can start it.
  * Terrain-following pieces (village streets) follow the island surface: see
- * {@link SkyStructureContext}.
+ * {@link SkyStructureContext}. Pieces that would hang off the island's edge are dropped, and the
+ * island is shaped to fit under the buildings when it generates (see {@code SkyIslandFeature}).
  */
 public class SkyJigsawStructure extends Structure {
     public static final MapCodec<SkyJigsawStructure> CODEC = RecordCodecBuilder.mapCodec(i -> i.group(
@@ -114,16 +119,48 @@ public class SkyJigsawStructure extends Structure {
                 LiquidSettings.APPLY_WATERLOGGING);
         // Pieces are laid out later, when the stub runs: do that with the island context active.
         SkyStructureContext.Active active = new SkyStructureContext.Active(sky, skyLayer, surface + 1);
-        return stub.map(s -> new GenerationStub(s.position(), builder -> SkyStructureContext.run(active,
-                () -> s.generator().map(
-                        consumer -> {
-                            consumer.accept(builder);
-                            return null;
-                        },
-                        built -> {
-                            built.build().pieces().forEach(builder::addPiece);
-                            return null;
-                        }))));
+        return stub.map(s -> new GenerationStub(s.position(), builder -> SkyStructureContext.run(active, () -> {
+            StructurePiecesBuilder laidOut = new StructurePiecesBuilder();
+            s.generator().map(
+                    consumer -> {
+                        consumer.accept(laidOut);
+                        return null;
+                    },
+                    built -> {
+                        built.build().pieces().forEach(laidOut::addPiece);
+                        return null;
+                    });
+            List<StructurePiece> pieces = laidOut.build().pieces();
+            for (int i = 0; i < pieces.size(); i++) {
+                // The first piece is the start, which is always on the island.
+                if (i == 0 || overIsland(sky, skyLayer, pieces.get(i).getBoundingBox())) {
+                    builder.addPiece(pieces.get(i));
+                }
+            }
+        })));
+    }
+
+    /**
+     * True if a piece's footprint is over the island: its centre and at least 3 of its 4 corners
+     * (1 block in) have island under them, near the piece's height. Pieces off the edge would
+     * otherwise float in the air next to the island.
+     */
+    private static boolean overIsland(SkyWorld sky, SkyWorld.CompiledLayer layer, BoundingBox box) {
+        int x0 = Math.min(box.minX() + 1, box.maxX());
+        int x1 = Math.max(box.maxX() - 1, box.minX());
+        int z0 = Math.min(box.minZ() + 1, box.maxZ());
+        int z1 = Math.max(box.maxZ() - 1, box.minZ());
+        if (!islandNear(sky, layer, (box.minX() + box.maxX()) / 2, (box.minZ() + box.maxZ()) / 2, box.minY())) {
+            return false;
+        }
+        int corners = (islandNear(sky, layer, x0, z0, box.minY()) ? 1 : 0) + (islandNear(sky, layer, x1, z0, box.minY()) ? 1 : 0)
+                + (islandNear(sky, layer, x0, z1, box.minY()) ? 1 : 0) + (islandNear(sky, layer, x1, z1, box.minY()) ? 1 : 0);
+        return corners >= 3;
+    }
+
+    private static boolean islandNear(SkyWorld sky, SkyWorld.CompiledLayer layer, int x, int z, int y) {
+        Integer top = sky.surfaceAt(layer, x, z);
+        return top != null && Math.abs(top - y) <= 16;
     }
 
     /**

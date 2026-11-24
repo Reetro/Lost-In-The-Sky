@@ -4,7 +4,7 @@ A Create Aeronautics addon for NeoForge 1.21.1. It raises the overworld to **2,0
 
 | Layer | Default height | Feel |
 |---|---|---|
-| `lower` | ~100 blocks above the ground under each island | Small meadow and birch islands |
+| `lower` | ~100 blocks above the ground under each island | Mirrors the biome below: a forest island over a forest, a desert island over a desert. Lush and dripstone caves |
 | `regular` | ~500 above sea level (y≈563) | Cherry and flower forests, sky outposts |
 | `high` | ~800 above sea level (y≈863) | Snowy groves and ice, frost sentinel encounter |
 | `final` | ~1,000 above sea level (y≈1063) | Huge Celestial Isles, sky warden encounter |
@@ -50,6 +50,8 @@ Everything is JSON. Put files in a datapack or in a mod's `data/` folder.
 - `chance`: chance a cell has an island.
 - `max_radius` is clamped to about `cell_size / 1.27` so islands never overlap the edge of the area the game checks.
 - `depth`: how far the rocky underside hangs down. `top_height`: how tall the dome on top is.
+- `cave_chance`: chance an island has caves (tunnels, chambers and sloped entrances on its top).
+- `mirror_ground_biome`: each island takes the ground biome under its centre: that biome is painted on it, its top blocks are copied from the ground under each column (grass, sand, podzol, terracotta...), and the biome's own vegetation grows on it. Over oceans and rivers the layer's sky biomes are used instead. On by default for `lower`.
 
 ### Biomes: `data/<ns>/lost_in_the_sky/sky_biome/<name>.json`
 
@@ -70,7 +72,26 @@ Everything is JSON. Put files in a datapack or in a mod's `data/` folder.
 
 - `biome` can be vanilla, another mod's, or your own. See `worldgen/biome/celestial_isles.json` for a custom biome with its own sky colour and mob spawns.
 - `decorations` are configured features placed on the island's surface (`tries` per chunk).
-- Each island picks one biome from its layer by `weight`.
+- Each island picks one biome from its layer by `weight`. On a `mirror_ground_biome` layer, sky biomes are only used for islands over water, and as fallback blocks where the ground under a column is water.
+
+### Cave biomes: `data/<ns>/lost_in_the_sky/sky_cave_biome/<name>.json`
+
+```json
+{
+  "layer": "lost_in_the_sky:lower",
+  "biome": "minecraft:lush_caves",
+  "weight": 1,
+  "decorations": [
+    { "feature": "minecraft:moss_patch", "placement": "floor", "tries": 24 },
+    { "feature": "minecraft:cave_vine", "placement": "ceiling", "tries": 30 },
+    { "feature": "minecraft:glow_lichen", "placement": "air", "tries": 6 }
+  ]
+}
+```
+
+- Each cave island in the layer picks one cave biome by `weight`. Its inside (more than 4 blocks under the surface) gets that biome; the top keeps its sky biome. Layers with no cave biomes keep plain stone caves.
+- `placement`: `floor` (cave air with rock below), `ceiling` (rock above) or `air` (anywhere in the cave, for features that look for surfaces themselves, like dripstone). `tries` per chunk; each try picks a random column, so chunks with more cave get more.
+- Defaults: lush caves and dripstone caves, on the lower layer only.
 
 ### Bosses and small structures: `data/<ns>/lost_in_the_sky/sky_encounter/<name>.json`
 

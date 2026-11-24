@@ -8,5 +8,5 @@
   "max_radius": 210,
   "top_height": 18,
   "depth": 120,
-  "cave_chance": 0.8
+  "cave_chance": 0.95
 }

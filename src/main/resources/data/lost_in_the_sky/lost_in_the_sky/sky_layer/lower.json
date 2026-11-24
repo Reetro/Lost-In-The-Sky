@@ -9,5 +9,6 @@
   "max_radius": 90,
   "top_height": 8,
   "depth": 50,
-  "cave_chance": 0.5
+  "cave_chance": 0.8,
+  "mirror_ground_biome": true
 }

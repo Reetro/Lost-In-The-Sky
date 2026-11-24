@@ -1,0 +1,14 @@
+{
+  "layer": "lost_in_the_sky:lower",
+  "biome": "minecraft:lush_caves",
+  "weight": 1,
+  "decorations": [
+    { "feature": "minecraft:moss_patch", "placement": "floor", "tries": 24 },
+    { "feature": "minecraft:lush_caves_clay", "placement": "floor", "tries": 6 },
+    { "feature": "minecraft:moss_patch_ceiling", "placement": "ceiling", "tries": 18 },
+    { "feature": "minecraft:cave_vine", "placement": "ceiling", "tries": 30 },
+    { "feature": "minecraft:spore_blossom", "placement": "ceiling", "tries": 4 },
+    { "feature": "minecraft:rooted_azalea_tree", "placement": "ceiling", "tries": 1, "chance": 0.4 },
+    { "feature": "minecraft:glow_lichen", "placement": "air", "tries": 6 }
+  ]
+}
