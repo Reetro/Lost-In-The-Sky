@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:block/cube_all",
+  "textures": {
+    "all": "lost_in_the_sky:block/ship_brain"
+  }
+}

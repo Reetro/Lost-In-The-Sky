@@ -9,7 +9,9 @@
     "GravityProcessorMixin",
     "JigsawPlacerMixin",
     "PlayerRespawnLogicMixin",
-    "ServerLevelMixin"
+    "QueuedForceGroupMixin",
+    "ServerLevelMixin",
+    "ServerSubLevelMixin"
   ],
   "injectors": {
     "defaultRequire": 1

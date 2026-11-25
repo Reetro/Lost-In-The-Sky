@@ -2,6 +2,7 @@ package com.reetro.lostinthesky;
 
 import com.mojang.logging.LogUtils;
 import com.reetro.lostinthesky.data.SkyRegistries;
+import com.reetro.lostinthesky.ship.ShipBrains;
 import com.reetro.lostinthesky.world.IslandShadows;
 import com.reetro.lostinthesky.world.SkyIslandFeature;
 import com.reetro.lostinthesky.world.SkyJigsawStructure;
@@ -29,6 +30,7 @@ import org.slf4j.Logger;
  *   <li>No island shadows on the ground: {@link IslandShadows}</li>
  *   <li>Big dungeons on islands: {@link SkyJigsawStructure}</li>
  *   <li>Layers, biomes, bosses: JSON, see {@link SkyRegistries}</li>
+ *   <li>AI airships (ship brain block): {@link ShipBrains}</li>
  * </ul>
  */
 @Mod(LostInTheSky.MODID)
@@ -51,6 +53,7 @@ public class LostInTheSky {
         modEventBus.addListener(SkyRegistries::onNewRegistry);
         NeoForge.EVENT_BUS.addListener(LostInTheSky::onServerStopped);
         IslandShadows.register(modEventBus);
+        ShipBrains.register(modEventBus);
     }
 
     private static void onServerStopped(ServerStoppedEvent event) {

@@ -70,6 +70,18 @@ neoForge {
 
 configurations {
     runtimeClasspath.extendsFrom localRuntime
+    sableJar { transitive = false }
+}
+
+// Sable's math/API types (Pose3d etc.) live in a jar nested inside Sable (sable-companion).
+// FML loads it at runtime; for compiling we pull it out of the Sable jar.
+var extractSableCompanion = tasks.register("extractSableCompanion", Sync) {
+    from({ zipTree(configurations.sableJar.singleFile) }) {
+        include 'META-INF/jarjar/sable-companion-*.jar'
+        eachFile { path = name }
+    }
+    includeEmptyDirs = false
+    into layout.buildDirectory.dir("sable-companion")
 }
 
 dependencies {
@@ -82,6 +94,8 @@ dependencies {
     implementation("com.tterrag.registrate:Registrate:${registrate_version}")
 
     implementation("maven.modrinth:sable:${sable_version}") { transitive = false }
+    sableJar("maven.modrinth:sable:${sable_version}")
+    compileOnly(files(extractSableCompanion).asFileTree)
     implementation("maven.modrinth:create-aeronautics:${aeronautics_version}") { transitive = false }
 
     // Create Big Cannons, and Ritchie's Projectile Library which it requires (both from CurseForge).
